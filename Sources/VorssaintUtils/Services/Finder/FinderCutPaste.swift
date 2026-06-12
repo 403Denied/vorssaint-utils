@@ -1,0 +1,355 @@
+import AppKit
+import ApplicationServices
+import Combine
+import CoreGraphics
+import SwiftUI
+
+/// Windows-style cut & paste for files in Finder: ⌘X marks the current
+/// selection, ⌘V moves it into the folder you're viewing. A global event tap
+/// claims those two shortcuts only while Finder is frontmost and no text field
+/// is being edited — so renaming and text editing keep working untouched.
+///
+/// The decision to swallow a keystroke is made synchronously (in-memory marks +
+/// the pasteboard change count + a fast Accessibility role check); the slow
+/// parts (reading the Finder selection, moving files) run off the tap thread.
+/// Requires Accessibility, and Automation consent for Finder on first use.
+final class FinderCutPaste: ObservableObject {
+    static let shared = FinderCutPaste()
+
+    struct MarkedItem: Identifiable, Equatable {
+        let id = UUID()
+        let url: URL
+        let icon: NSImage
+        var name: String { url.lastPathComponent }
+
+        // NSImage isn't Equatable; identity + path is enough to diff the list.
+        static func == (lhs: MarkedItem, rhs: MarkedItem) -> Bool {
+            lhs.id == rhs.id && lhs.url == rhs.url
+        }
+    }
+
+    struct MoveResult: Equatable {
+        let moved: Int
+        let failed: Int
+    }
+
+    /// Files currently held for a move; drives the feedback HUD.
+    @Published private(set) var marked: [MarkedItem] = []
+    /// Set briefly after a paste so the HUD can confirm the move.
+    @Published private(set) var lastResult: MoveResult?
+
+    /// Pasteboard change count captured when the cut was made. A ⌘V only turns
+    /// into a move while this still matches — if anything else wrote to the
+    /// pasteboard since, ⌘V is left as a normal paste.
+    private var markedChangeCount = 0
+
+    private var tap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var panel: NSPanel?
+    private var resultDismiss: DispatchWorkItem?
+
+    private static let finderBundleID = "com.apple.finder"
+
+    // ANSI virtual key codes.
+    private enum Key {
+        static let x: Int64 = 7
+        static let c: Int64 = 8
+        static let v: Int64 = 9
+    }
+
+    private init() {}
+
+    var isRunning: Bool { tap != nil }
+
+    /// Applies the persisted preference; safe to call repeatedly.
+    func syncWithPreferences() {
+        let enabled = UserDefaults.standard.bool(forKey: DefaultsKey.finderCutPasteEnabled)
+        if enabled, Permissions.shared.accessibility {
+            installTap()
+        } else {
+            removeTap()
+            clearMarks()
+        }
+    }
+
+    // MARK: - Event tap
+
+    private func installTap() {
+        guard tap == nil else { return }
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let service = Unmanaged<FinderCutPaste>.fromOpaque(userInfo).takeUnretainedValue()
+                return service.handle(type: type, event: event)
+            },
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else { return }
+
+        self.tap = tap
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        runLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+    }
+
+    private func removeTap() {
+        if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
+        if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
+        tap = nil
+        runLoopSource = nil
+    }
+
+    /// Runs on the main thread (the tap source lives on the main run loop), so
+    /// reading `marked` and the pasteboard here is race-free.
+    private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            return Unmanaged.passUnretained(event)
+        }
+        guard type == .keyDown else { return Unmanaged.passUnretained(event) }
+
+        let flags = event.flags
+        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+
+        // Only plain ⌘ + X/C/V, with Finder frontmost and no text being edited.
+        guard flags.contains(.maskCommand),
+              !flags.contains(.maskControl), !flags.contains(.maskAlternate),
+              keyCode == Key.x || keyCode == Key.c || keyCode == Key.v,
+              NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Self.finderBundleID,
+              !isEditingText()
+        else { return Unmanaged.passUnretained(event) }
+
+        switch keyCode {
+        case Key.x:
+            // Finder has no native cut for files, so swallowing ⌘X is safe.
+            cutAsync()
+            return nil
+        case Key.c:
+            // Copying something else supersedes a pending cut; let Finder copy.
+            if !marked.isEmpty { clearMarks() }
+            return Unmanaged.passUnretained(event)
+        case Key.v:
+            guard !marked.isEmpty, NSPasteboard.general.changeCount == markedChangeCount else {
+                return Unmanaged.passUnretained(event) // nothing of ours to move → normal paste
+            }
+            pasteAsync()
+            return nil
+        default:
+            return Unmanaged.passUnretained(event)
+        }
+    }
+
+    /// True when the keyboard focus is in an editable text control, so cut/copy/
+    /// paste shortcuts must be left to the system (e.g. renaming a file).
+    private func isEditingText() -> Bool {
+        let system = AXUIElementCreateSystemWide()
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(system, "AXFocusedUIElement" as CFString, &focused) == .success,
+              let focused else { return false }
+        let element = focused as! AXUIElement
+        var roleRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, "AXRole" as CFString, &roleRef) == .success,
+              let role = roleRef as? String else { return false }
+        // Stable public AX role strings; literals dodge CFString/String import quirks.
+        return ["AXTextField", "AXTextArea", "AXComboBox", "AXSecureTextField"].contains(role)
+    }
+
+    // MARK: - Cut
+
+    private func cutAsync() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let urls = FinderBridge.selectionURLs()
+            DispatchQueue.main.async { self?.applyCut(urls) }
+        }
+    }
+
+    private func applyCut(_ urls: [URL]) {
+        guard !urls.isEmpty else { clearMarks(); return }
+        marked = urls.map { MarkedItem(url: $0, icon: NSWorkspace.shared.icon(forFile: $0.path)) }
+        // Also place the files on the pasteboard so a normal ⌘V elsewhere still
+        // works as a copy, and so the move guard has a change count to anchor to.
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects(urls as [NSURL])
+        markedChangeCount = pb.changeCount
+        lastResult = nil
+        refreshPanel()
+    }
+
+    // MARK: - Paste (move)
+
+    private func pasteAsync() {
+        let urls = marked.map(\.url)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let destPath = FinderBridge.insertionLocationPath() else {
+                DispatchQueue.main.async { self?.finishPaste(moved: 0, failed: urls.count) }
+                return
+            }
+            let dir = URL(fileURLWithPath: destPath, isDirectory: true)
+            let fm = FileManager.default
+            var moved = 0, failed = 0
+            for src in urls {
+                if Self.move(src, into: dir, fm: fm) { moved += 1 } else { failed += 1 }
+            }
+            DispatchQueue.main.async { self?.finishPaste(moved: moved, failed: failed) }
+        }
+    }
+
+    private func finishPaste(moved: Int, failed: Int) {
+        marked = []
+        markedChangeCount = 0
+        lastResult = MoveResult(moved: moved, failed: failed)
+        refreshPanel()
+        scheduleResultDismiss()
+    }
+
+    private static func move(_ src: URL, into dir: URL, fm: FileManager) -> Bool {
+        // A no-op move (already in the destination) counts as success.
+        if src.deletingLastPathComponent().standardizedFileURL.path == dir.standardizedFileURL.path {
+            return true
+        }
+        guard fm.fileExists(atPath: src.path) else { return false }
+        let dest = uniqueDestination(for: src.lastPathComponent, in: dir, fm: fm)
+        do {
+            try fm.moveItem(at: src, to: dest)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Appends " 2", " 3"… before the extension when a name already exists,
+    /// matching how Finder de-duplicates.
+    private static func uniqueDestination(for name: String, in dir: URL, fm: FileManager) -> URL {
+        var candidate = dir.appendingPathComponent(name)
+        guard fm.fileExists(atPath: candidate.path) else { return candidate }
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        var n = 2
+        repeat {
+            let next = ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)"
+            candidate = dir.appendingPathComponent(next)
+            n += 1
+        } while fm.fileExists(atPath: candidate.path)
+        return candidate
+    }
+
+    // MARK: - Marks / panel
+
+    func clearMarks() {
+        guard !marked.isEmpty || lastResult != nil else { return }
+        marked = []
+        markedChangeCount = 0
+        lastResult = nil
+        refreshPanel()
+    }
+
+    private func scheduleResultDismiss() {
+        resultDismiss?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.lastResult = nil
+            self?.refreshPanel()
+        }
+        resultDismiss = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: work)
+    }
+
+    private func refreshPanel() {
+        if marked.isEmpty, lastResult == nil {
+            panel?.orderOut(nil)
+        } else {
+            showPanel()
+        }
+    }
+
+    private func showPanel() {
+        let panel = ensurePanel()
+        let view = panel.contentViewController!.view
+        view.layoutSubtreeIfNeeded()
+        let size = view.fittingSize
+        let screen = screenWithMouse().visibleFrame
+        let frame = NSRect(x: screen.midX - size.width / 2,
+                           y: screen.maxY - size.height - 14,
+                           width: size.width, height: size.height)
+        panel.setFrame(frame, display: true)
+        panel.orderFrontRegardless()
+    }
+
+    private func ensurePanel() -> NSPanel {
+        if let panel { return panel }
+        let panel = NSPanel(contentRect: .zero,
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.level = .statusBar
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        let host = NSHostingController(rootView: CutFeedbackView().environmentObject(self))
+        host.sizingOptions = .preferredContentSize
+        panel.contentViewController = host
+        self.panel = panel
+        return panel
+    }
+
+    private func screenWithMouse() -> NSScreen {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main ?? NSScreen.screens[0]
+    }
+}
+
+/// Talks to Finder over AppleScript to read the current selection and the
+/// folder a paste would land in. Runs `osascript` in a subprocess with a
+/// watchdog so a wedged Finder can never hang the app.
+private enum FinderBridge {
+    static func selectionURLs() -> [URL] {
+        let script = """
+        tell application "Finder"
+            set out to ""
+            repeat with f in (get selection)
+                set out to out & (POSIX path of (f as alias)) & linefeed
+            end repeat
+            return out
+        end tell
+        """
+        guard let output = runOSA(script) else { return [] }
+        return output.split(whereSeparator: \.isNewline)
+            .map { URL(fileURLWithPath: String($0)) }
+    }
+
+    static func insertionLocationPath() -> String? {
+        let script = """
+        tell application "Finder"
+            return POSIX path of (insertion location as alias)
+        end tell
+        """
+        let path = runOSA(script)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (path?.isEmpty == false) ? path : nil
+    }
+
+    private static func runOSA(_ source: String, timeout: TimeInterval = 5) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = Pipe()
+        do { try process.run() } catch { return nil }
+
+        let watchdog = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile() // returns on exit or terminate
+        process.waitUntilExit()
+        watchdog.cancel()
+
+        guard process.terminationStatus == 0 else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+}

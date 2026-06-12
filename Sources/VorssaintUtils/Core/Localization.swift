@@ -162,6 +162,23 @@ struct Strings {
     let switcherTabsToggle: String
     let switcherTabsCaption: String
 
+    // MARK: Feature — cut & paste in Finder
+    let cutPasteName: String
+    let cutPasteEnable: String
+    let cutPasteEnableCaption: String
+    let cutPasteHowTitle: String
+    let cutPasteStep1: String
+    let cutPasteStep2: String
+    let cutPasteTextNote: String
+    let cutPasteActiveNow: String
+    let cutPasteAutomationNote: String
+    let cutReadyTitle: String
+    let cutReadyHint: String
+    let cutDoneTitle: String
+    let cutMovedSingular: String
+    let cutMovedPluralFormat: String      // + count
+    let cutSomeFailed: String
+
     // MARK: Panel — per-app breakdown
     let breakdownMeasuring: String
 
@@ -346,6 +363,22 @@ extension Strings {
         switcherTabsToggle: "Mostrar abas dos navegadores",
         switcherTabsCaption: "Cada aba do Safari, Chrome, Edge, Brave ou Vivaldi vira uma entrada no alternador. O macOS pede permissão de automação na primeira vez, por navegador.",
 
+        cutPasteName: "Recortar e colar",
+        cutPasteEnable: "Recortar e colar arquivos no Finder",
+        cutPasteEnableCaption: "Use ⌘X para recortar e ⌘V para mover arquivos e pastas — como o Ctrl+X e Ctrl+V do Windows.",
+        cutPasteHowTitle: "Como usar",
+        cutPasteStep1: "Selecione itens no Finder e pressione ⌘X para recortá-los.",
+        cutPasteStep2: "Abra a pasta de destino e pressione ⌘V para movê-los para lá.",
+        cutPasteTextNote: "Em campos de texto (como ao renomear), ⌘X e ⌘V continuam funcionando normalmente.",
+        cutPasteActiveNow: "Pronto para recortar no Finder",
+        cutPasteAutomationNote: "Na primeira vez, o macOS pede permissão para controlar o Finder.",
+        cutReadyTitle: "Recortado",
+        cutReadyHint: "na pasta de destino para mover",
+        cutDoneTitle: "Movido!",
+        cutMovedSingular: "1 item movido",
+        cutMovedPluralFormat: "%d itens movidos",
+        cutSomeFailed: "Alguns itens não puderam ser movidos",
+
         breakdownMeasuring: "Medindo…",
 
         mixerSection: "Mixer de volume",
@@ -524,6 +557,22 @@ extension Strings {
         switcherNoWindows: "No open windows",
         switcherTabsToggle: "Show browser tabs",
         switcherTabsCaption: "Every Safari, Chrome, Edge, Brave or Vivaldi tab becomes a switcher entry. macOS asks for Automation consent once per browser.",
+
+        cutPasteName: "Cut & paste",
+        cutPasteEnable: "Cut & paste files in Finder",
+        cutPasteEnableCaption: "Use ⌘X to cut and ⌘V to move files and folders — just like Ctrl+X and Ctrl+V on Windows.",
+        cutPasteHowTitle: "How to use",
+        cutPasteStep1: "Select items in Finder and press ⌘X to cut them.",
+        cutPasteStep2: "Open the destination folder and press ⌘V to move them there.",
+        cutPasteTextNote: "In text fields (like when renaming), ⌘X and ⌘V keep working as usual.",
+        cutPasteActiveNow: "Ready to cut in Finder",
+        cutPasteAutomationNote: "The first time, macOS asks for permission to control Finder.",
+        cutReadyTitle: "Cut",
+        cutReadyHint: "in the destination folder to move",
+        cutDoneTitle: "Moved!",
+        cutMovedSingular: "1 item moved",
+        cutMovedPluralFormat: "%d items moved",
+        cutSomeFailed: "Some items couldn’t be moved",
 
         breakdownMeasuring: "Measuring…",
 

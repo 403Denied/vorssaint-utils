@@ -17,6 +17,7 @@ enum DefaultsKey {
     static let switcherShowBrowserTabs = "switcherShowBrowserTabs"
     static let autoCheckUpdates = "autoCheckUpdates"
     static let appVolumes = "appVolumes"                  // [bundle id: 0...1]
+    static let finderCutPasteEnabled = "finderCutPasteEnabled"
 }
 
 enum Defaults {
