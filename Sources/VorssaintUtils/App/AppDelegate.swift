@@ -51,7 +51,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             .store(in: &cancellables)
 
         if !UserDefaults.standard.bool(forKey: DefaultsKey.hasOnboarded) {
-            showOnboarding()
+            showOnboarding(mode: .full)
+        } else if UserDefaults.standard.integer(forKey: DefaultsKey.featuresOnboardingVersion) < OnboardingInfo.currentFeatureSet {
+            // Existing users see a short tour once, to discover and configure
+            // this version's new features.
+            showOnboarding(mode: .whatsNew)
         }
     }
 
@@ -274,20 +278,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         uninstallerWindow?.close()
     }
 
-    func showOnboarding() {
+    func showOnboarding(mode: OnboardingMode = .full) {
         closePopover()
         if let window = onboardingWindow {
             NSApp.activate(ignoringOtherApps: true)
             window.makeKeyAndOrderFront(nil)
             return
         }
-        let host = NSHostingController(rootView: OnboardingView { [weak self] in
-            UserDefaults.standard.set(true, forKey: DefaultsKey.hasOnboarded)
+        let host = NSHostingController(rootView: OnboardingView(mode: mode) { [weak self] in
+            self?.markOnboardingComplete()
             Notifier.requestPermission()
             self?.onboardingWindow?.close()
         })
         let window = NSWindow(contentViewController: host)
-        window.title = L10n.shared.s.obStepWelcomeTitle
+        window.title = mode == .whatsNew ? L10n.shared.s.obWhatsNewTitle : L10n.shared.s.obStepWelcomeTitle
         window.styleMask = [.titled, .closable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -307,6 +311,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         // the relaunch macOS forces after granting Screen Recording) must NOT,
         // so the flow can resume where it stopped.
         guard !isTerminating else { return }
+        markOnboardingComplete()
+    }
+
+    /// Marks both the first run and this version's feature tour as seen, so
+    /// neither reappears on the next launch.
+    private func markOnboardingComplete() {
         UserDefaults.standard.set(true, forKey: DefaultsKey.hasOnboarded)
+        UserDefaults.standard.set(OnboardingInfo.currentFeatureSet, forKey: DefaultsKey.featuresOnboardingVersion)
     }
 }

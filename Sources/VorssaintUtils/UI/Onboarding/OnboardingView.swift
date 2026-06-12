@@ -4,16 +4,41 @@ import SwiftUI
 /// First-run experience, also reachable later through Settings › About.
 /// Seven steps: welcome & language, Accessibility, Screen Recording, system
 /// monitor, optional features, status verification and the final summary.
+/// Whether onboarding is the first-run tour or the shorter "what's new" pass
+/// shown once to people updating to this version.
+enum OnboardingMode {
+    case full
+    case whatsNew
+
+    var steps: [OnboardingStep] {
+        switch self {
+        case .full:
+            return [.welcome, .accessibility, .screenRecording, .monitor, .optionalFeatures,
+                    .cutPaste, .autoQuit, .uninstaller, .shelf, .status, .done]
+        case .whatsNew:
+            return [.whatsNew, .cutPaste, .autoQuit, .uninstaller, .shelf, .done]
+        }
+    }
+}
+
+enum OnboardingStep {
+    case welcome, accessibility, screenRecording, monitor, optionalFeatures
+    case whatsNew, cutPaste, autoQuit, uninstaller, shelf
+    case status, done
+}
+
 struct OnboardingView: View {
+    var mode: OnboardingMode = .full
     var onFinish: () -> Void
 
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var permissions = Permissions.shared
     /// Persisted so the flow resumes where it stopped — macOS relaunches the
     /// app when Screen Recording is granted mid-onboarding.
-    @AppStorage(DefaultsKey.onboardingStep) private var step = 0
+    @AppStorage(DefaultsKey.onboardingStep) private var index = 0
 
-    private let stepCount = 7
+    private var steps: [OnboardingStep] { mode.steps }
+    private var current: OnboardingStep { steps[min(max(0, index), steps.count - 1)] }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,57 +50,62 @@ struct OnboardingView: View {
         }
         .frame(width: 540, height: 600)
         .onAppear {
-            if !(0..<stepCount).contains(step) { step = 0 }
+            if !steps.indices.contains(index) { index = 0 }
         }
     }
 
     @ViewBuilder
     private var content: some View {
-        switch step {
-        case 0: WelcomeStep()
-        case 1: PermissionStep(kind: .accessibility,
-                               icon: "accessibility",
-                               title: l10n.s.obStepAccessibilityTitle,
-                               body: l10n.s.obStepAccessibilityBody,
-                               why: l10n.s.obAccessibilityWhy)
-        case 2: PermissionStep(kind: .screenRecording,
-                               icon: "rectangle.dashed.badge.record",
-                               title: l10n.s.obStepRecordingTitle,
-                               body: l10n.s.obStepRecordingBody,
-                               why: l10n.s.obRecordingWhy)
-        case 3: MonitorStep()
-        case 4: OptionalFeaturesStep()
-        case 5: StatusStep()
-        default: DoneStep()
+        switch current {
+        case .welcome: WelcomeStep()
+        case .accessibility: PermissionStep(kind: .accessibility,
+                                            icon: "accessibility",
+                                            title: l10n.s.obStepAccessibilityTitle,
+                                            body: l10n.s.obStepAccessibilityBody,
+                                            why: l10n.s.obAccessibilityWhy)
+        case .screenRecording: PermissionStep(kind: .screenRecording,
+                                              icon: "rectangle.dashed.badge.record",
+                                              title: l10n.s.obStepRecordingTitle,
+                                              body: l10n.s.obStepRecordingBody,
+                                              why: l10n.s.obRecordingWhy)
+        case .monitor: MonitorStep()
+        case .optionalFeatures: OptionalFeaturesStep()
+        case .whatsNew: WhatsNewIntroStep()
+        case .cutPaste: CutPasteShowcaseStep()
+        case .autoQuit: AutoQuitShowcaseStep()
+        case .uninstaller: UninstallerShowcaseStep()
+        case .shelf: ShelfShowcaseStep()
+        case .status: StatusStep()
+        case .done: DoneStep()
         }
     }
 
     private var navigationBar: some View {
         HStack {
             Button(l10n.s.obBack) {
-                withAnimation(.easeInOut(duration: 0.2)) { step = max(0, step - 1) }
+                withAnimation(.easeInOut(duration: 0.2)) { index = max(0, index - 1) }
             }
-            .disabled(step == 0)
+            .disabled(index == 0)
 
             Spacer()
 
             HStack(spacing: 6) {
-                ForEach(0..<stepCount, id: \.self) { index in
+                ForEach(steps.indices, id: \.self) { i in
                     Capsule()
-                        .fill(index == step ? Color.accentColor : Color.primary.opacity(0.15))
-                        .frame(width: index == step ? 18 : 7, height: 7)
-                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: step)
+                        .fill(i == index ? Color.accentColor : Color.primary.opacity(0.15))
+                        .frame(width: i == index ? 18 : 7, height: 7)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: index)
                 }
             }
 
             Spacer()
 
             Button(primaryButtonTitle) {
-                if step == stepCount - 1 {
-                    step = 0
+                if index >= steps.count - 1 {
+                    index = 0
                     onFinish()
                 } else {
-                    withAnimation(.easeInOut(duration: 0.2)) { step += 1 }
+                    withAnimation(.easeInOut(duration: 0.2)) { index += 1 }
                 }
             }
             .keyboardShortcut(.defaultAction)
@@ -86,12 +116,11 @@ struct OnboardingView: View {
     }
 
     private var primaryButtonTitle: String {
-        switch step {
-        case 1 where !permissions.accessibility,
-             2 where !permissions.screenRecording:
+        if index >= steps.count - 1 { return l10n.s.obStart }
+        switch current {
+        case .accessibility where !permissions.accessibility,
+             .screenRecording where !permissions.screenRecording:
             return l10n.s.obSkipStep
-        case stepCount - 1:
-            return l10n.s.obStart
         default:
             return l10n.s.obContinue
         }

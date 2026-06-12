@@ -321,6 +321,8 @@ struct Strings {
     let obStepDoneTitle: String
     let obStepDoneBody: String
     let obDoneHint: String
+    let obWhatsNewTitle: String
+    let obWhatsNewBody: String
 }
 
 // MARK: - Português (Brasil)
@@ -580,7 +582,9 @@ extension Strings {
         obStatusRecheck: "Verificar novamente",
         obStepDoneTitle: "Tudo pronto!",
         obStepDoneBody: "O Vorssaint Utils já está cuidando do seu Mac.",
-        obDoneHint: "Procure o buraco negro na barra de menus, no canto superior direito da tela."
+        obDoneHint: "Procure o buraco negro na barra de menus, no canto superior direito da tela.",
+        obWhatsNewTitle: "Novidades nesta versão",
+        obWhatsNewBody: "Quatro novos recursos opcionais. Veja como cada um funciona e ative os que quiser — leva menos de um minuto."
     )
 }
 
@@ -841,6 +845,8 @@ extension Strings {
         obStatusRecheck: "Check again",
         obStepDoneTitle: "All set!",
         obStepDoneBody: "Vorssaint Utils is already looking after your Mac.",
-        obDoneHint: "Look for the black hole in the menu bar, at the top right of the screen."
+        obDoneHint: "Look for the black hole in the menu bar, at the top right of the screen.",
+        obWhatsNewTitle: "What's new in this version",
+        obWhatsNewBody: "Four new optional features. See how each one works and turn on the ones you want — it takes under a minute."
     )
 }

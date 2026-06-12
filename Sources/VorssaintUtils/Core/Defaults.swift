@@ -6,6 +6,7 @@ enum DefaultsKey {
     static let keepDisplayOn = "keepDisplayOn"
     static let clamshellPreferred = "clamshellPreferred"  // apply closed-lid mode to every session
     static let onboardingStep = "onboardingStep"          // resume point if onboarding is interrupted
+    static let featuresOnboardingVersion = "featuresOnboardingVersion" // last feature-tour version the user saw
     static let defaultDuration = "defaultDurationMinutes" // 0 = indefinite
     static let batteryLimit = "batteryLimitPercent"       // 0 = never
     static let hotkeyEnabled = "hotkeyEnabled"
@@ -23,6 +24,13 @@ enum DefaultsKey {
     static let uninstallerEnabled = "uninstallerEnabled"
     static let shelfEnabled = "shelfEnabled"
     static let shelfShakeToOpen = "shelfShakeToOpen"
+}
+
+/// Bump `currentFeatureSet` when a release introduces new features worth a
+/// one-time tour. Users who onboarded under an older value are shown the
+/// "what's new" pass once, then their stored value catches up.
+enum OnboardingInfo {
+    static let currentFeatureSet = 1
 }
 
 enum Defaults {
